@@ -1,0 +1,206 @@
+import os
+import logging
+from datetime import datetime
+from functools import wraps
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes
+)
+
+# ================= BASIC CONFIG =================
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+PASSKEY = "MARSHON#2026"
+BOT_NAME = "ZUES"
+CREDIT = "_Made by MARSHON_"
+BRAND = "⚡ ZUES ⚡"
+
+logging.basicConfig(level=logging.INFO)
+
+# ================= STATE =================
+AUTHORIZED_USERS = set()
+SELECTED_PAIR = None
+PAIR_TIMEFRAME = None
+LIVE_MESSAGE_ID = None
+
+STATS = {"correct": 0, "failed": 0}
+
+PAIRS = [
+    "EUR/USD", "EUR/USD OTC",
+    "AUD/USD", "AUD/USD OTC",
+    "GBP/USD", "GBP/USD OTC",
+    "USD/JPY", "USD/JPY OTC"
+]
+
+TIMEFRAMES = [
+    "3s","5s","10s","30s",
+    "1m","5m","15m","30m",
+    "1h","4h","1d","4d"
+]
+
+# ================= SECURITY =================
+def authorized_only(func):
+    @wraps(func)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        if user_id not in AUTHORIZED_USERS:
+            await update.message.reply_text("🔐 Please login first:\n/login MARSHON#2026")
+            return
+        return await func(update, context)
+    return wrapper
+
+# ================= COMMANDS =================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await context.bot.send_photo(
+            chat_id=update.effective_chat.id,
+            photo=open("zues_logo.png","rb")
+        )
+    except:
+        pass
+
+    await update.message.reply_text(
+        f"{BRAND}\nManual High-Accuracy Trading Signals\n\n/login MARSHON#2026"
+    )
+
+async def login(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Usage:\n/login MARSHON#2026")
+        return
+    if context.args[0] == PASSKEY:
+        AUTHORIZED_USERS.add(update.effective_user.id)
+        await update.message.reply_text("✅ Access Granted\nUse /dashboard")
+    else:
+        await update.message.reply_text("❌ Invalid passkey")
+
+@authorized_only
+async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton(pair, callback_data=f"PAIR|{pair}")]
+        for pair in PAIRS
+    ]
+    await update.message.reply_text(
+        f"{BRAND}\nSelect ONE pair:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+# ================= CALLBACKS =================
+async def select_pair(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global SELECTED_PAIR
+    query = update.callback_query
+    await query.answer()
+
+    SELECTED_PAIR = query.data.split("|")[1]
+
+    tf_buttons = []
+    for i in range(0, len(TIMEFRAMES), 3):
+        tf_buttons.append([
+            InlineKeyboardButton(tf, callback_data=f"TF|{tf}")
+            for tf in TIMEFRAMES[i:i+3]
+        ])
+
+    await query.edit_message_text(
+        f"✅ Pair selected: {SELECTED_PAIR}\n\nSelect timeframe:",
+        reply_markup=InlineKeyboardMarkup(tf_buttons)
+    )
+
+async def select_timeframe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global PAIR_TIMEFRAME
+    query = update.callback_query
+    await query.answer()
+
+    PAIR_TIMEFRAME = query.data.split("|")[1]
+
+    await query.edit_message_text(
+        f"📊 {SELECTED_PAIR}\n⏱ Timeframe: {PAIR_TIMEFRAME}\n\nUse /signal"
+    )
+
+# ================= SIGNAL LOGIC =================
+def generate_signal():
+    # Simulated high-confidence logic placeholder
+    from random import choice, randint
+    signal = choice(["BUY","SELL","HOLD"])
+    confidence = randint(90,97)
+    return signal, confidence
+
+@authorized_only
+async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global LIVE_MESSAGE_ID
+
+    if not SELECTED_PAIR or not PAIR_TIMEFRAME:
+        await update.message.reply_text("⚠️ Select pair & timeframe first using /dashboard")
+        return
+
+    signal, confidence = generate_signal()
+    time_now = datetime.utcnow().strftime("%H:%M:%S UTC")
+
+    emoji = "🟢 BUY 🚀" if signal=="BUY" else "🔴 SELL 🔥" if signal=="SELL" else "⚠️ HOLD ⚡"
+
+    text = (
+        f"*{SELECTED_PAIR}*\n"
+        f"{emoji}\n"
+        f"Confidence: {confidence}%\n"
+        f"Signal lasts: {PAIR_TIMEFRAME}\n"
+        f"Time: {time_now}\n\n"
+        f"{CREDIT}"
+    )
+
+    buttons = [[
+        InlineKeyboardButton("✅ Correct", callback_data="CORRECT"),
+        InlineKeyboardButton("❌ Failed", callback_data="FAILED")
+    ]]
+
+    msg = await update.message.reply_text(
+        text,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+    LIVE_MESSAGE_ID = msg.message_id
+
+async def mark_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "CORRECT":
+        STATS["correct"] += 1
+    else:
+        STATS["failed"] += 1
+
+    await query.edit_message_reply_markup(reply_markup=None)
+
+@authorized_only
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    total = STATS["correct"] + STATS["failed"]
+    acc = (STATS["correct"]/total*100) if total>0 else 0
+    await update.message.reply_text(
+        f"📊 ZUES Accuracy\n\n"
+        f"Correct: {STATS['correct']}\n"
+        f"Failed: {STATS['failed']}\n"
+        f"Accuracy: {acc:.2f}%"
+    )
+
+# ================= MAIN =================
+def main():
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("login", login))
+    app.add_handler(CommandHandler("dashboard", dashboard))
+    app.add_handler(CommandHandler("signal", signal))
+    app.add_handler(CommandHandler("stats", stats))
+
+    app.add_handler(CallbackQueryHandler(select_pair, pattern="^PAIR"))
+    app.add_handler(CallbackQueryHandler(select_timeframe, pattern="^TF"))
+    app.add_handler(CallbackQueryHandler(mark_result, pattern="CORRECT|FAILED"))
+
+    print("⚡ ZUES is running...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
